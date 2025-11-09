@@ -2,9 +2,6 @@
 
 A production-ready code snippet sharing platform built with Spring Boot, React, Docker, and Kubernetes. Share, discover, and manage code snippets with Markdown support and syntax highlighting.
 
-![Backend CI](https://github.com/username/snipper/workflows/Backend%20CI/badge.svg)
-![Frontend CI](https://github.com/username/snipper/workflows/Frontend%20CI/badge.svg)
-![Docker Build](https://github.com/username/snipper/workflows/Docker%20Build%20and%20Push/badge.svg)
 
 ## Features
 
