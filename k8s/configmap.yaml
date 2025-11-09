@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: snipper-config
+  namespace: snipper
+data:
+  # Backend configuration
+  SPRING_PROFILES_ACTIVE: "prod"
+  SPRING_DATASOURCE_URL: "jdbc:mysql://mysql-service:3306/snipper?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true"
+  JWT_EXPIRATION: "86400000"
+  
+  # MySQL configuration
+  MYSQL_DATABASE: "snipper"

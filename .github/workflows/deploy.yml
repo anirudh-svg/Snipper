@@ -1,0 +1,130 @@
+name: Deploy to Kubernetes
+
+on:
+  workflow_run:
+    workflows: ["Docker Build and Push"]
+    types:
+      - completed
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    environment:
+      name: ${{ github.event.inputs.environment || 'staging' }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'latest'
+
+    - name: Configure kubectl
+      run: |
+        mkdir -p $HOME/.kube
+        echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > $HOME/.kube/config
+        chmod 600 $HOME/.kube/config
+
+    - name: Set environment variables
+      run: |
+        if [ "${{ github.event.inputs.environment }}" == "production" ]; then
+          echo "NAMESPACE=snipper-prod" >> $GITHUB_ENV
+          echo "IMAGE_TAG=latest" >> $GITHUB_ENV
+        else
+          echo "NAMESPACE=snipper-staging" >> $GITHUB_ENV
+          echo "IMAGE_TAG=staging" >> $GITHUB_ENV
+        fi
+
+    - name: Create namespace if not exists
+      run: |
+        kubectl create namespace ${{ env.NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
+    - name: Deploy ConfigMap
+      run: |
+        kubectl apply -f k8s/configmap.yaml -n ${{ env.NAMESPACE }}
+
+    - name: Deploy Secrets
+      run: |
+        kubectl create secret generic snipper-secret \
+          --from-literal=MYSQL_ROOT_PASSWORD=${{ secrets.MYSQL_ROOT_PASSWORD }} \
+          --from-literal=MYSQL_USER=${{ secrets.MYSQL_USER }} \
+          --from-literal=MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }} \
+          --from-literal=SPRING_DATASOURCE_USERNAME=${{ secrets.MYSQL_USER }} \
+          --from-literal=SPRING_DATASOURCE_PASSWORD=${{ secrets.MYSQL_PASSWORD }} \
+          --from-literal=JWT_SECRET=${{ secrets.JWT_SECRET }} \
+          -n ${{ env.NAMESPACE }} \
+          --dry-run=client -o yaml | kubectl apply -f -
+
+    - name: Deploy MySQL
+      run: |
+        kubectl apply -f k8s/mysql-pvc.yaml -n ${{ env.NAMESPACE }}
+        kubectl apply -f k8s/mysql-statefulset.yaml -n ${{ env.NAMESPACE }}
+        kubectl wait --for=condition=ready pod -l app=mysql -n ${{ env.NAMESPACE }} --timeout=300s
+
+    - name: Update Backend deployment
+      run: |
+        kubectl set image deployment/backend \
+          backend=ghcr.io/${{ github.repository }}/backend:${{ env.IMAGE_TAG }} \
+          -n ${{ env.NAMESPACE }} || \
+        kubectl apply -f k8s/backend-deployment.yaml -n ${{ env.NAMESPACE }}
+
+    - name: Wait for Backend rollout
+      run: |
+        kubectl rollout status deployment/backend -n ${{ env.NAMESPACE }} --timeout=300s
+
+    - name: Update Frontend deployment
+      run: |
+        kubectl set image deployment/frontend \
+          frontend=ghcr.io/${{ github.repository }}/frontend:${{ env.IMAGE_TAG }} \
+          -n ${{ env.NAMESPACE }} || \
+        kubectl apply -f k8s/frontend-deployment.yaml -n ${{ env.NAMESPACE }}
+
+    - name: Wait for Frontend rollout
+      run: |
+        kubectl rollout status deployment/frontend -n ${{ env.NAMESPACE }} --timeout=300s
+
+    - name: Deploy HPA
+      run: |
+        kubectl apply -f k8s/hpa.yaml -n ${{ env.NAMESPACE }}
+
+    - name: Verify deployment
+      run: |
+        kubectl get pods -n ${{ env.NAMESPACE }}
+        kubectl get svc -n ${{ env.NAMESPACE }}
+
+    - name: Run smoke tests
+      run: |
+        BACKEND_URL=$(kubectl get svc backend-service -n ${{ env.NAMESPACE }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+        if [ -z "$BACKEND_URL" ]; then
+          BACKEND_URL=$(kubectl get svc backend-service -n ${{ env.NAMESPACE }} -o jsonpath='{.spec.clusterIP}')
+        fi
+        
+        echo "Testing backend health endpoint..."
+        kubectl run curl-test --image=curlimages/curl:latest --rm -i --restart=Never -n ${{ env.NAMESPACE }} -- \
+          curl -f http://backend-service:9090/actuator/health || exit 1
+        
+        echo "Deployment successful!"
+
+    - name: Notify deployment status
+      if: always()
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        text: 'Deployment to ${{ env.NAMESPACE }} ${{ job.status }}'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      continue-on-error: true
