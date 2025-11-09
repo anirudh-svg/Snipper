@@ -488,10 +488,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Authors
 
-- **Your Name** - *Initial work* - [YourGitHub](https://github.com/yourusername)
+- **ANIRUDHAN** - *Initial work* - [YourGitHub](https://github.com/anirudh-svg)
 
-See also the list of [contributors](https://github.com/username/snipper/contributors) who participated in this project.
 
----
-
-Made by the Snipper team
